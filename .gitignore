@@ -1,0 +1,10 @@
+/target/
+/.benchmarks/
+/Cargo.lock
+.DS_Store
+*.local.sh
+
+# docs
+*.md
+!README.md
+!ARCHITECTURE.md

@@ -1,0 +1,83 @@
+[package]
+autotests = false
+name = "claviron-runner"
+version = "0.2.0-alpha.26.1"
+edition = "2024"
+description = "Shared HTTP and Orbit ingress, routing, and launch support for Claviron application runners"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/claviron/runner"
+homepage = "https://github.com/claviron"
+authors = ["ilker Arabaci <iadev09@claviron.dev>"]
+include = ["/src/**", "/tests/**", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+keywords = ["application-server", "runtime", "http", "async", "ipc"]
+categories = ["web-programming::http-server", "asynchronous", "network-programming"]
+
+[features]
+default = []
+rust = []
+axum = ["rust", "dep:axum", "claviron/axum"]
+warp = ["rust", "dep:warp", "claviron/warp"]
+socket = ["claviron/websocket"]
+orbit = ["claviron/orbit", "claviron/config-watch"]
+tls = ["socket", "claviron/tls"]
+files = []
+cli = ["dep:clap"]
+supervisor = ["claviron/supervisor"]
+websocket = ["socket", "claviron/websocket-session"]
+watch = ["dep:notify"]
+module = ["claviron/module"]
+bench = ["axum", "orbit", "socket", "supervisor", "claviron/bench", "claviron/upstream"]
+metrics = ["claviron/metrics"]
+
+[dependencies]
+claviron = { version = "0.2.0-alpha.26.1", path = "../../claviron", default-features = false, features = ["server", "http", "pipeline", "transport"] }
+async-trait = "0.1"
+axum = { version = "0.8", optional = true }
+bytes = "1.11"
+clap = { version = "4.6", features = ["derive"], optional = true }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+notify = { version = "8.2", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+warp = { version = "0.4.3", default-features = false, optional = true }
+
+[dev-dependencies]
+clap = { version = "4.6", features = ["derive"] }
+futures-util = "0.3"
+humantime = "2"
+humantime-serde = "1"
+libc = "0.2"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "test-util", "time"] }
+
+[[bench]]
+name = "link-concurrent"
+path = "benches/transport/link/concurrent.rs"
+harness = false
+test = false
+required-features = ["bench"]
+
+[[bench]]
+name = "h2-concurrent"
+path = "benches/transport/h2/concurrent.rs"
+harness = false
+test = false
+required-features = ["bench"]
+
+[[bench]]
+name = "uds-h2-concurrent"
+path = "benches/transport/h2/unix.rs"
+harness = false
+test = false
+required-features = ["bench"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
