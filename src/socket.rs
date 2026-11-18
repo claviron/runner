@@ -39,6 +39,8 @@ impl SocketIngress {
         }
     }
 
+    /// Serve every TLS listener with this certificate, and the client
+    /// certificate it requires, if any.
     #[cfg(feature = "tls")]
     pub fn tls(
         self,
@@ -56,6 +58,58 @@ impl SocketIngress {
                 })
                 .collect(),
         }
+    }
+
+    /// Require a client certificate on the listeners named here, each
+    /// verified as its declaration says, and on no other listener, whatever
+    /// [`Self::tls`] required. An empty selection changes nothing. Every name
+    /// must be a TLS listener of this ingress with a certificate to serve.
+    #[cfg(feature = "tls")]
+    pub fn client_auth(
+        self,
+        selection: impl IntoIterator<
+            Item = (
+                claviron::http::listener::ListenerId,
+                claviron::tls::auth::ClientAuth,
+            ),
+        >,
+    ) -> Result<Self, String> {
+        let mut selection: std::collections::HashMap<_, _> =
+            selection.into_iter().collect();
+        if selection.is_empty() {
+            return Ok(self);
+        }
+        for id in selection.keys() {
+            let listener = self
+                .listeners
+                .iter()
+                .find(|listener| listener.config.id == *id);
+            crate::options::selectable(
+                id,
+                listener.map(|listener| listener.config.as_ref()),
+            )?;
+            if listener.is_some_and(|listener| listener.tls.is_none()) {
+                return Err(format!(
+                    "client_auth names '{id}', which has no certificate to serve"
+                ));
+            }
+        }
+        Ok(Self {
+            listeners: self
+                .listeners
+                .iter()
+                .map(|listener| {
+                    let tls = listener.tls.clone().map(|mut tls| {
+                        tls.client_auth = selection.remove(&listener.config.id);
+                        tls
+                    });
+                    Arc::new(Listener::new(ApplicationListener {
+                        config: listener.config.clone(),
+                        tls,
+                    }))
+                })
+                .collect(),
+        })
     }
 }
 
@@ -110,18 +164,57 @@ impl Adapter for ApplicationListener {
         state: AppState,
         context: RunContext,
     ) -> registry::Result<()> {
+        #[cfg(feature = "tls")]
+        let tls = match &self.tls {
+            Some(tls) => {
+                Some(with_authority(tls, &self.config.id, &state).await?)
+            }
+            None => None,
+        };
         let owner =
             Arc::new(Front { application, trust: trust.unwrap_or_default() });
         claviron::transport::single::serve(
             self.config.clone(),
             owner,
             #[cfg(feature = "tls")]
-            self.tls.as_ref(),
+            tls.as_deref(),
             &state,
             &context,
         )
         .await
     }
+}
+
+/// `tls` with the store authority its client authentication selects, read
+/// from this process's certificate store as the listener starts. A CA bundle,
+/// or no client authentication, needs nothing from the store.
+#[cfg(feature = "tls")]
+async fn with_authority<'a>(
+    tls: &'a crate::Tls,
+    listener: &claviron::http::listener::ListenerId,
+    state: &AppState,
+) -> registry::Result<std::borrow::Cow<'a, crate::Tls>> {
+    let Some(source) = tls
+        .client_auth
+        .as_ref()
+        .and_then(claviron::tls::auth::ClientAuth::store_authority)
+    else {
+        return Ok(std::borrow::Cow::Borrowed(tls));
+    };
+    let store = state
+        .registry_ref()
+        .resolve::<claviron::tls::CertificateStore>()
+        .ok_or_else(|| {
+            registry::Error::msg(format!(
+                "listener '{listener}': client_auth.authority selects an authority of the certificate store, and this process declares none"
+            ))
+        })?;
+    let authority = store.trust(source).await.map_err(|error| {
+        registry::Error::msg(format!(
+            "listener '{listener}': client_auth.authority: {error}"
+        ))
+    })?;
+    Ok(std::borrow::Cow::Owned(tls.clone().authority(Arc::new(authority))))
 }
 
 struct Front {

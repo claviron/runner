@@ -226,6 +226,8 @@ listeners:
     protocols: [h1, h2]
 tls_cert: ...                  # with tls
 tls_key: ...
+client_auth:                   # with tls: per listener, as an Edge host's
+  application: { authority: { local: example } }
 trusted: [10.0.0.0/8]          # peers whose forwarding headers count
 requests:  { max_body_size: 64 MiB, body_read_timeout: 30s }
 responses: { idle_timeout: 60s }
@@ -284,7 +286,16 @@ before server construction, not a panic from converting an unchecked string.
   use port sharing; Unix worker sockets inherit one master-bound FD. Worker
   stop/restart closes only its descriptor copies, never the shared path.
   Check-config opens nothing. See transport's architecture for the current
-  replacement-master descriptor recovery limitation.
+  replacement-master descriptor recovery limitation. TLS listeners share the
+  process's certificate (`tls_cert`, `tls_key`). Client authentication is
+  either process-wide (`tls_client_ca`, every TLS listener) or a per-listener
+  selection (`client_auth`, keyed by listener id, each value the
+  `ClientAuth` an Edge host declares); with a selection, an unnamed listener
+  asks for no certificate. `SocketIngress::client_auth` is this crate's
+  adapter: the shared listener declaration carries no client authentication,
+  and host policy stays with the Edge. A store authority is resolved with
+  `CertificateStore::trust` in each process as its listener starts and handed
+  to transport's `Tls::authority`; the verifier is transport's.
 - **Orbit** — the lane in the configured `fleet_name` under the owner's runtime
   name, read by one Tokio task through `InboxReceiver`; SHM holds the frame
   and a named descriptor bell wakes the reactor directly, with no poll and no

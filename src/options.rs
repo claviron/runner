@@ -13,10 +13,12 @@
 //! policy, a static mount — travels as it was written and is parsed where it
 //! is used.
 
+use std::collections::BTreeMap;
 #[cfg(any(feature = "files", feature = "watch", feature = "tls"))]
 use std::path::PathBuf;
 
 use claviron::http::config::ListenerOverrides;
+use claviron::http::listener::ListenerId;
 use claviron::http::policy::{HttpPolicy, HttpPolicyOverride};
 use claviron::http::trust::Network;
 use serde::{Deserialize, Serialize};
@@ -116,10 +118,20 @@ pub struct RunnerOptions {
     #[cfg_attr(feature = "cli", arg(long, requires = "tls_cert"))]
     pub tls_key: Option<PathBuf>,
 
-    /// Require a client certificate signed by this authority.
+    /// Require a client certificate signed by this authority, on every TLS
+    /// listener of the process.
     #[cfg(feature = "tls")]
     #[cfg_attr(feature = "cli", arg(long, requires = "tls_cert"))]
     pub tls_client_ca: Option<PathBuf>,
+
+    /// The TLS listeners that require a client certificate, by name, each
+    /// with the declaration an Edge host makes under `tls.client_auth`:
+    /// `authority: {local: name}` or `ca_bundle: path`, and optionally
+    /// `organization` with `unit`. With a selection, only the listeners named
+    /// here ask for a certificate. Written in the file only; carried as
+    /// written and parsed where it is used.
+    #[cfg_attr(feature = "cli", arg(skip))]
+    pub client_auth: BTreeMap<ListenerId, serde_yaml::Value>,
 
     /// The request side of the policy (`max_body_size`, `body_read_timeout`,
     /// `queue_timeout`, …). Unwritten, nothing is bounded.
@@ -237,6 +249,7 @@ impl RunnerOptions {
         "tls_key",
         #[cfg(feature = "tls")]
         "tls_client_ca",
+        "client_auth",
         "requests",
         "responses",
         "site",
@@ -295,6 +308,8 @@ impl RunnerOptions {
             tls_key: self.tls_key.or(written.tls_key),
             #[cfg(feature = "tls")]
             tls_client_ca: self.tls_client_ca.or(written.tls_client_ca),
+            // Written in the file only.
+            client_auth: written.client_auth,
             requests: self.requests.or(written.requests),
             responses: self.responses.or(written.responses),
             site: self.site.or(written.site),
@@ -344,6 +359,13 @@ impl RunnerOptions {
                     "TLS is served on a tcp socket, and none is named".into()
                 );
             }
+            self.client_auth()?;
+        }
+        #[cfg(not(feature = "tls"))]
+        if !self.client_auth.is_empty() {
+            return Err(
+                "client_auth needs claviron-runner's `tls` feature".into()
+            );
         }
         if self.orbit.as_ref().is_some_and(|orbit| !orbit.is_mapping()) {
             return Err("orbit must be a configuration mapping".into());
@@ -509,16 +531,76 @@ impl RunnerOptions {
         Ok(snapshot.listeners.into_values().collect())
     }
 
-    /// The certificate for the TCP socket, if one is named.
+    /// The certificate for the TCP socket, if one is named, and the client
+    /// CA every TLS listener requires, if one is named.
     #[cfg(feature = "tls")]
     pub fn tls(&self) -> Option<crate::Tls> {
         let (certificate, key) =
             self.tls_cert.clone().zip(self.tls_key.clone())?;
         let tls = crate::Tls::new(certificate, key);
         Some(match &self.tls_client_ca {
-            Some(ca) => tls.client_ca(ca.clone()),
+            Some(ca) => tls.client_auth(
+                claviron::tls::auth::ClientAuth::ca_bundle(ca.clone()),
+            ),
             None => tls,
         })
+    }
+
+    /// The listeners `client_auth` selects, each with its parsed declaration.
+    /// Every name is a declared TLS listener, and the process-wide
+    /// `tls_client_ca` is not stated beside them.
+    #[cfg(feature = "tls")]
+    pub fn client_auth(
+        &self
+    ) -> Result<Vec<(ListenerId, claviron::tls::auth::ClientAuth)>, String>
+    {
+        if self.client_auth.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.tls_client_ca.is_some() {
+            return Err("declare client certificates once: tls_client_ca for every TLS listener, or client_auth for each one it names".into());
+        }
+        let listeners = self.socket_listeners()?;
+        self.client_auth
+            .iter()
+            .map(|(id, written)| {
+                selectable(
+                    id,
+                    listeners
+                        .iter()
+                        .find(|listener| listener.id == *id)
+                        .map(AsRef::as_ref),
+                )?;
+                let auth = serde_yaml::from_value(written.clone())
+                    .map_err(|error| format!("client_auth.{id}: {error}"))?;
+                Ok((id.clone(), auth))
+            })
+            .collect()
+    }
+}
+
+/// Whether `listener`, the declaration `client_auth` names as `id`, can ask
+/// for a client certificate: it exists and serves TLS.
+#[cfg(feature = "tls")]
+pub(crate) fn selectable(
+    id: &ListenerId,
+    listener: Option<&claviron::http::config::ListenerConfig>,
+) -> Result<(), String> {
+    use claviron::http::config::{ListenerSettings, TcpSecurity};
+    let Some(listener) = listener else {
+        return Err(format!(
+            "client_auth names '{id}', which is not a declared listener"
+        ));
+    };
+    match &listener.settings {
+        ListenerSettings::Tcp(tcp)
+            if matches!(tcp.security, TcpSecurity::Tls { .. }) =>
+        {
+            Ok(())
+        }
+        _ => Err(format!(
+            "client_auth names '{id}', which does not serve TLS; a client certificate is asked for in the TLS handshake, so the listener needs tls: true"
+        )),
     }
 }
 

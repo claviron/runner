@@ -10,18 +10,36 @@ or JavaScript interpreter of its own.
 Use `claviron-runner` for application launch and ingress. Enable the capabilities
 your application uses on this dependency.
 
-## Runner or edge?
+## What a runner is
 
-Claviron's two main HTTP server compositions serve different needs. The runner
-is for a single framework or application without virtual-host selection. It can
-serve HTTP directly, run as an HTTP upstream behind a proxy, or receive requests
-from a same-host edge over Orbit Link. Those are ingress choices around the same
-application owner, not separate execution engines.
+A runner hosts one application from that application's own project. The
+project owns the process: the runner is a dependency of the application, its
+configuration is one launch file beside the application's code, and it is
+built and started with the tools the application's developers already use.
 
-Use [claviron-edge](https://github.com/claviron/claviron/tree/main/crates/edge) for a host-aware application server that
-combines multiple applications, script routes, native services, and other
-configured handlers directly on Claviron. A runner does not need to carry that
-virtual-host publication layer merely to execute one framework.
+"Runner" names that ownership. It does not name a separate server. A runner is
+assembled from the same parts as every other Claviron composition: the same
+listeners, TLS, cache, database pools and Orbit transport, declared in the
+launch file with the schemas those parts use everywhere. A declaration means
+the same thing here as it does anywhere else in Claviron.
+
+Around the one application owner, ingress is a choice, not a different
+engine: serve HTTP directly, run as an upstream behind a proxy, or receive
+requests from an edge on the same host over Orbit Link.
+
+A runner is not the opposite of an edge.
+[claviron-edge](https://github.com/claviron/claviron/tree/main/crates/edge)
+names something else: selecting among hosts and applying the policy prepared
+for each of them, across several applications, script routes and native
+services. A runner serves a single host because one application needs no
+more, and it does not carry host selection merely to execute one framework.
+An application that needs virtual hosts, several applications behind one
+address or per-host policy is served through an edge, with the runner behind
+it.
+
+What one runner process can hold is decided by its engine, not by the word
+"runner": a Python runner holds one interpreter and one environment, a PHP
+runner one application.
 
 ## Native Rust applications
 
@@ -200,6 +218,38 @@ is `uds.backlog`. Each instance is managed as `Listener:<id>`. In supervised
 mode the master binds each Unix socket once and workers inherit descriptors;
 worker restart retains the socket. Recovering a shared FD from workers that
 survive replacement of their master is not supported yet.
+
+### Client certificates
+
+`tls_cert` and `tls_key` are the certificate every TLS listener serves.
+`tls_client_ca` makes every TLS listener require a client certificate signed by
+that CA. To require one on some listeners only, name them under `client_auth`
+instead; each value is the declaration an Edge host makes in its `tls` block:
+
+```yaml
+listeners:
+  public:
+    transport: tcp
+    listen: 127.0.0.1:8443
+    protocols: [h2, h1]
+    tls: true
+  internal:
+    transport: tcp
+    listen: 127.0.0.1:8444
+    protocols: [h2, h1]
+    tls: true
+client_auth:
+  internal:
+    ca_bundle: config/tls/clients-ca.pem   # or: authority: {local: example}
+```
+
+`internal` requires a client certificate the declaration verifies; `public`
+asks for none. A listener that is not declared, or does not serve TLS, is
+refused when the launch is validated, and so is `tls_client_ca` beside
+`client_auth`. `authority` selects a CA of the process's certificate store,
+read when the listener starts; `ca_bundle` is a PEM file. `organization` and
+`unit`, given together, also require that subject on the client's certificate.
+The verified certificate reaches the application as the connection's TLS facts.
 
 Listener connection/protocol settings are per declaration. Request and response
 policy stays application-wide under `requests` and `responses` at the runner
