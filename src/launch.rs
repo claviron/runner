@@ -207,12 +207,8 @@ pub fn register_doors(
                 runner.socket_listeners().map_err(registry::Error::msg)?,
             );
             #[cfg(feature = "tls")]
-            let ingress = ingress
-                .tls(runner.tls())
-                .client_auth(
-                    runner.client_auth().map_err(registry::Error::msg)?,
-                )
-                .map_err(registry::Error::msg)?;
+            let ingress =
+                ingress.tls(runner.tls()).map_err(registry::Error::msg)?;
             let ingress = Arc::new(ingress);
             state.registry_ref().register(ingress.clone())?;
             let owner = Arc::downgrade(&ingress);

@@ -212,7 +212,7 @@ listeners:
       mode: "0660"
 ```
 
-Use `transport: tcp` and an IP socket address for TCP; TLS uses `tls: true`
+Use `transport: tcp` and an IP socket address for TCP; TLS uses `tls: on`
 with the runner's certificate inputs. TCP backlog is `tcp.backlog`; Unix backlog
 is `uds.backlog`. Each instance is managed as `Listener:<id>`. In supervised
 mode the master binds each Unix socket once and workers inherit descriptors;
@@ -221,10 +221,11 @@ survive replacement of their master is not supported yet.
 
 ### Client certificates
 
-`tls_cert` and `tls_key` are the certificate every TLS listener serves.
-`tls_client_ca` makes every TLS listener require a client certificate signed by
-that CA. To require one on some listeners only, name them under `client_auth`
-instead; each value is the declaration an Edge host makes in its `tls` block:
+`tls_cert` and `tls_key` are the certificate every TLS listener serves. A
+listener's `tls` says what it asks of a client: `on` asks for no certificate,
+and a mapping with `client_auth` requires one, with the same declaration an
+Edge host makes in its `tls` block (`true` and `false` read as `on` and
+`off`):
 
 ```yaml
 listeners:
@@ -232,24 +233,25 @@ listeners:
     transport: tcp
     listen: 127.0.0.1:8443
     protocols: [h2, h1]
-    tls: true
+    tls: on
   internal:
     transport: tcp
     listen: 127.0.0.1:8444
     protocols: [h2, h1]
-    tls: true
-client_auth:
-  internal:
-    ca_bundle: config/tls/clients-ca.pem   # or: authority: {local: example}
+    tls:
+      client_auth:
+        ca_bundle: config/tls/clients-ca.pem   # or: authority: {local: example}
 ```
 
 `internal` requires a client certificate the declaration verifies; `public`
-asks for none. A listener that is not declared, or does not serve TLS, is
-refused when the launch is validated, and so is `tls_client_ca` beside
-`client_auth`. `authority` selects a CA of the process's certificate store,
+asks for none. `authority` selects a CA of the process's certificate store,
 read when the listener starts; `ca_bundle` is a PEM file. `organization` and
 `unit`, given together, also require that subject on the client's certificate.
-The verified certificate reaches the application as the connection's TLS facts.
+`tls_client_ca` instead requires a certificate signed by that CA on every TLS
+listener; it is refused beside a listener that declares its own policy. The
+verified certificate reaches the application as the connection's TLS facts.
+The listener's TLS states and what its policy means are described in
+[Claviron's TLS architecture](https://github.com/claviron/claviron/blob/main/crates/tls/ARCHITECTURE.md#50b-a-listeners-tls-and-the-one-policy-rule).
 
 Listener connection/protocol settings are per declaration. Request and response
 policy stays application-wide under `requests` and `responses` at the runner

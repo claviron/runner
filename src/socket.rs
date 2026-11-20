@@ -39,77 +39,40 @@ impl SocketIngress {
         }
     }
 
-    /// Serve every TLS listener with this certificate, and the client
-    /// certificate it requires, if any.
+    /// Serve every TLS listener with this certificate. A listener whose
+    /// declaration states `tls.client_auth` requires that client certificate;
+    /// every other listener requires the one `tls` carries, if any. Both
+    /// cannot be given: a certificate that requires one of every listener is
+    /// refused beside a listener that declares its own.
     #[cfg(feature = "tls")]
     pub fn tls(
         self,
         tls: Option<crate::Tls>,
-    ) -> Self {
-        Self {
-            listeners: self
-                .listeners
-                .iter()
-                .map(|listener| {
-                    Arc::new(Listener::new(ApplicationListener {
-                        config: listener.config.clone(),
-                        tls: tls.clone(),
-                    }))
-                })
-                .collect(),
-        }
-    }
-
-    /// Require a client certificate on the listeners named here, each
-    /// verified as its declaration says, and on no other listener, whatever
-    /// [`Self::tls`] required. An empty selection changes nothing. Every name
-    /// must be a TLS listener of this ingress with a certificate to serve.
-    #[cfg(feature = "tls")]
-    pub fn client_auth(
-        self,
-        selection: impl IntoIterator<
-            Item = (
-                claviron::http::listener::ListenerId,
-                claviron::tls::auth::ClientAuth,
-            ),
-        >,
     ) -> Result<Self, String> {
-        let mut selection: std::collections::HashMap<_, _> =
-            selection.into_iter().collect();
-        if selection.is_empty() {
-            return Ok(self);
-        }
-        for id in selection.keys() {
-            let listener = self
-                .listeners
-                .iter()
-                .find(|listener| listener.config.id == *id);
-            crate::options::selectable(
-                id,
-                listener.map(|listener| listener.config.as_ref()),
-            )?;
-            if listener.is_some_and(|listener| listener.tls.is_none()) {
-                return Err(format!(
-                    "client_auth names '{id}', which has no certificate to serve"
-                ));
-            }
-        }
-        Ok(Self {
-            listeners: self
-                .listeners
-                .iter()
-                .map(|listener| {
-                    let tls = listener.tls.clone().map(|mut tls| {
-                        tls.client_auth = selection.remove(&listener.config.id);
-                        tls
-                    });
-                    Arc::new(Listener::new(ApplicationListener {
-                        config: listener.config.clone(),
-                        tls,
-                    }))
-                })
-                .collect(),
-        })
+        let listeners = self
+            .listeners
+            .iter()
+            .map(|listener| {
+                let tls = match (tls.clone(), listener.config.client_auth()) {
+                    (Some(tls), Some(_)) if tls.client_auth.is_some() => {
+                        return Err(format!(
+                            "listener '{}': {}",
+                            listener.config.id,
+                            crate::options::DECLARE_CLIENT_AUTH_ONCE
+                        ));
+                    }
+                    (Some(tls), Some(auth)) => {
+                        Some(tls.client_auth(auth.clone()))
+                    }
+                    (tls, _) => tls,
+                };
+                Ok(Arc::new(Listener::new(ApplicationListener {
+                    config: listener.config.clone(),
+                    tls,
+                })))
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(Self { listeners })
     }
 }
 
