@@ -1,7 +1,7 @@
 [package]
 autotests = false
 name = "claviron-runner"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "Shared HTTP and Orbit ingress, routing, and launch support for Claviron application runners"
 license = "MIT OR Apache-2.0"
@@ -30,7 +30,7 @@ bench = ["axum", "orbit", "socket", "supervisor", "claviron/bench", "claviron/up
 metrics = ["claviron/metrics"]
 
 [dependencies]
-claviron = { version = "0.2.2", default-features = false, features = ["server", "http", "pipeline", "transport"] }
+claviron = { version = "0.2.8", default-features = false, features = ["server", "http", "pipeline", "transport"] }
 async-trait = "0.1"
 axum = { version = "0.8", optional = true }
 bytes = "1.11"
